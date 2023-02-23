@@ -17,7 +17,8 @@
  
 const recorders = {};
 
-function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints }) {
+function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints, messagePort }) {
+	console.log({messagePort})
 	chrome.tabCapture.capture(
 		{
 			audio,
@@ -40,15 +41,25 @@ function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, v
 			recorder.ondataavailable = async function (event) {
 				if (event.data.size > 0) {
 					const buffer = await event.data.arrayBuffer();
-					const data = arrayBufferToString(buffer);
+					// const data = arrayBufferToString(buffer);
+					console.log(buffer, `http://127.0.0.1:${messagePort}/api/record`)
 
-					if (window.sendData) {
-						window.sendData({
+					fetch(`http://127.0.0.1:${messagePort}/api/record`, {
+						method: 'POST',
+						body: buffer,
+						headers: {
 							id: index,
-							data,
 							timecode: event.timecode
-						});
-					}
+						}
+					})
+
+					// if (window.sendData) {
+					// 	window.sendData({
+					// 		id: index,
+					// 		data,
+					// 		timecode: event.timecode
+					// 	});
+					// }
 				}
 			};
 			recorder.onerror = () => recorder.stop();

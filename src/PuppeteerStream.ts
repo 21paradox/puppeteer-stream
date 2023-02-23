@@ -6,6 +6,9 @@ import {
 	BrowserLaunchArgumentOptions,
 	BrowserConnectOptions,
 } from "puppeteer-core";
+import getPort from 'get-port';
+import http from 'http'
+
 import { Readable, ReadableOptions } from "stream";
 import * as path from "path";
 
@@ -40,7 +43,11 @@ declare module "puppeteer-core" {
 	}
 }
 
-type BrowserWithExtension = Browser & { encoders?: Map<number, Stream>; videoCaptureExtension?: Page };
+type BrowserWithExtension = Browser & { 
+	encoders?: Map<number, Stream>; 
+	videoCaptureExtension?: Page 
+	messagePort?: number
+};
 
 export async function launch(
 	arg1: (LaunchOptions & BrowserLaunchArgumentOptions & BrowserConnectOptions) | any,
@@ -50,6 +57,31 @@ export async function launch(
 	if (typeof arg1.launch != "function") {
 		opts = arg1;
 	}
+
+	const messagePort = await getPort()
+	const server = http.createServer(async (req, res) => {
+		const headers = req.headers
+		if (req.url === '/api/record') {
+			const buffers = [];
+			for await (const chunk of req) {
+				buffers.push(chunk);
+			}
+			const bufall = Buffer.concat(buffers)
+
+			const id = Number(headers.id)
+			const timecode = Number(headers.timecode)
+			const encoder = browser.encoders?.get(id);
+			if (encoder) {
+				encoder.timecode = timecode;
+				encoder.push(bufall);
+			}
+			res.end('ok')
+			return
+		}
+		res.end('a')
+	})
+	server.listen(messagePort)
+
 
 	if (!opts) opts = {};
 
@@ -75,12 +107,15 @@ export async function launch(
 
 		return x;
 	});
+	
 
 	if (!loadExtension) opts.args.push("--load-extension=" + extensionPath);
 	if (!loadExtensionExcept) opts.args.push("--disable-extensions-except=" + extensionPath);
 	if (!whitelisted) opts.args.push("--whitelisted-extension-id=" + extensionId);
 	if (opts.defaultViewport?.width && opts.defaultViewport?.height)
 		opts.args.push(`--window-size=${opts.defaultViewport?.width}x${opts.defaultViewport?.height}`);
+
+	console.log(opts)
 
 	opts.headless = false;
 
@@ -90,6 +125,7 @@ export async function launch(
 	} else {
 		browser = await puppeteerLaunch(opts);
 	}
+	browser.messagePort = messagePort
 	browser.encoders = new Map();
 
 	const extensionTarget = await browser.waitForTarget(
@@ -161,20 +197,21 @@ export async function getStream(page: PageWithExtension, opts: getStreamOptions)
 		if (opts.video) opts.mimeType = "video/webm";
 		else if (opts.audio) opts.mimeType = "audio/webm";
 	}
-	if (!opts.frameSize) opts.frameSize = 20;
+	if (!opts.frameSize) opts.frameSize = 1 * 1000;
 
 	await page.bringToFront();
 
 	if (page.index === undefined) {
 		page.index = currentIndex++;
 	}
+	const browser =  await page.browser()
 
 	await page.browser().videoCaptureExtension?.evaluate(
 		(settings) => {
 			// @ts-ignore
 			START_RECORDING(settings);
 		},
-		{ ...opts, index: page.index }
+		{ ...opts, index: page.index, messagePort: browser.messagePort }
 	);
 	page.browser().encoders?.set(page.index, encoder);
 
