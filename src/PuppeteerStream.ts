@@ -1,18 +1,11 @@
-import {
-	launch as puppeteerLaunch,
-	LaunchOptions,
-	Browser,
-	Page,
-	BrowserLaunchArgumentOptions,
-	BrowserConnectOptions,
-} from "puppeteer-core";
+import { chromium, BrowserContext, Page, LaunchOptions } from 'playwright';
 import getPort from 'get-port';
 import http from 'http'
 
 import { Readable, ReadableOptions } from "stream";
 import * as path from "path";
 
-type PageWithExtension = Omit<Page, "browser"> & { browser(): BrowserWithExtension };
+type PageWithExtension = Omit<Page, "context"> & { context(): BrowserWithExtension, index: number };
 
 let currentIndex = 0;
 
@@ -27,7 +20,7 @@ export class Stream extends Readable {
 
 	// @ts-ignore
 	async destroy() {
-		await this.page.browser().videoCaptureExtension?.evaluate((index) => {
+		await this.page.context().videoCaptureExtension?.evaluate((index) => {
 			// @ts-ignore
 			STOP_RECORDING(index);
 		}, this.page.index);
@@ -36,28 +29,20 @@ export class Stream extends Readable {
 	}
 }
 
-declare module "puppeteer-core" {
-	interface Page {
-		index: number;
-		getStream(opts: getStreamOptions): Promise<Stream>;
-	}
-}
 
-type BrowserWithExtension = Browser & { 
+type BrowserWithExtension = BrowserContext & { 
 	encoders?: Map<number, Stream>; 
 	videoCaptureExtension?: Page 
 	messagePort?: number
 };
 
 export async function launch(
-	arg1: (LaunchOptions & BrowserLaunchArgumentOptions & BrowserConnectOptions) | any,
-	opts?: LaunchOptions & BrowserLaunchArgumentOptions & BrowserConnectOptions
-): Promise<Browser> {
-	//if puppeteer library is not passed as first argument, then first argument is options
-	if (typeof arg1.launch != "function") {
-		opts = arg1;
+	opts: LaunchOptions & {
+		userDataDir: string
 	}
-
+): Promise<BrowserWithExtension> {
+	//if puppeteer library is not passed as first argument, then first argument is options
+	
 	const messagePort = await getPort()
 	const server = http.createServer(async (req, res) => {
 		const headers = req.headers
@@ -67,6 +52,7 @@ export async function launch(
 				buffers.push(chunk);
 			}
 			const bufall = Buffer.concat(buffers)
+			// console.log(headers.id, bufall.length)
 
 			const id = Number(headers.id)
 			const timecode = Number(headers.timecode)
@@ -82,8 +68,6 @@ export async function launch(
 	})
 	server.listen(messagePort)
 
-
-	if (!opts) opts = {};
 
 	if (!opts.args) opts.args = [];
 
@@ -112,55 +96,35 @@ export async function launch(
 	if (!loadExtension) opts.args.push("--load-extension=" + extensionPath);
 	if (!loadExtensionExcept) opts.args.push("--disable-extensions-except=" + extensionPath);
 	if (!whitelisted) opts.args.push("--whitelisted-extension-id=" + extensionId);
-	if (opts.defaultViewport?.width && opts.defaultViewport?.height)
-		opts.args.push(`--window-size=${opts.defaultViewport?.width}x${opts.defaultViewport?.height}`);
-
-	console.log(opts)
+	// if (opts.defaultViewport?.width && opts.defaultViewport?.height)
+	// 	opts.args.push(`--window-size=${opts.defaultViewport?.width}x${opts.defaultViewport?.height}`);
 
 	opts.headless = false;
 
 	let browser: BrowserWithExtension;
-	if (typeof arg1.launch == "function") {
-		browser = await arg1.launch(opts);
-	} else {
-		browser = await puppeteerLaunch(opts);
-	}
+	const userDataDir = opts.userDataDir || '/tmp/test-user-data-dir';
+	const browser1 = await chromium.launchPersistentContext(userDataDir, opts);
+	browser = browser1
 	browser.messagePort = messagePort
 	browser.encoders = new Map();
 
-	const extensionTarget = await browser.waitForTarget(
-		// @ts-ignore
-		(target) =>
-			target.type() === "background_page" &&
-			target.url() === `chrome-extension://${extensionId}/_generated_background_page.html`
-	);
-
-	if (!extensionTarget) {
-		throw new Error("cannot load extension");
+	let [backgroundPage] = browser.backgroundPages();
+	if (!backgroundPage) {
+		backgroundPage = await browser.waitForEvent('backgroundpage');
 	}
-
-	const videoCaptureExtension = await extensionTarget.page();
-
+	let videoCaptureExtension = null
+	for (const page of browser.backgroundPages()) {
+		if (page.url() === `chrome-extension://${extensionId}/_generated_background_page.html`) {
+			videoCaptureExtension = page
+			break
+		}
+	}
 	if (!videoCaptureExtension) {
 		throw new Error("cannot get page of extension");
 	}
 
 	browser.videoCaptureExtension = videoCaptureExtension;
 
-	await browser.videoCaptureExtension.exposeFunction("sendData", (opts: any) => {
-		const encoder = browser.encoders?.get(opts.id);
-		if (!encoder) {
-			return;
-		}
-
-		const data = Buffer.from(str2ab(opts.data));
-		encoder.timecode = opts.timecode;
-		encoder.push(data);
-	});
-
-	await browser.videoCaptureExtension.exposeFunction("log", (...opts: any) => {
-		console.log("videoCaptureExtension", ...opts);
-	});
 
 	return browser;
 }
@@ -199,33 +163,21 @@ export async function getStream(page: PageWithExtension, opts: getStreamOptions)
 	}
 	if (!opts.frameSize) opts.frameSize = 1 * 1000;
 
-	await page.bringToFront();
-
 	if (page.index === undefined) {
 		page.index = currentIndex++;
 	}
-	const browser =  await page.browser()
+	const browser = page.context();
+	await page.bringToFront();
 
-	await page.browser().videoCaptureExtension?.evaluate(
+	await browser.videoCaptureExtension?.evaluate(
 		(settings) => {
 			// @ts-ignore
-			START_RECORDING(settings);
+			return START_RECORDING(settings);
 		},
 		{ ...opts, index: page.index, messagePort: browser.messagePort }
 	);
-	page.browser().encoders?.set(page.index, encoder);
+	page.context().encoders?.set(page.index, encoder);
 
 	return encoder;
 }
 
-function str2ab(str: any) {
-	// Convert a UTF-8 String to an ArrayBuffer
-
-	var buf = new ArrayBuffer(str.length); // 1 byte for each char
-	var bufView = new Uint8Array(buf);
-
-	for (var i = 0, strLen = str.length; i < strLen; i++) {
-		bufView[i] = str.charCodeAt(i);
-	}
-	return buf;
-}

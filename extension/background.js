@@ -1,87 +1,71 @@
 // @ts-nocheck
 /* global chrome, MediaRecorder, FileReader */
 
-// need to reload extension when puppeteer-extra plugin is provided
- chrome.storage.local.get(/* String or Array */["done"], function(items){
- 	let done = items?.done;
-	setTimeout(() => {
-		console.log(done)
-		if (done) return;
-		chrome.storage.local.set({ "done": true }, function(){
- 			chrome.runtime.reload ()
-		});
-	 }, 1000);
-});
 
 
- 
+
 const recorders = {};
 
 function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints, messagePort }) {
-	console.log({messagePort})
-	chrome.tabCapture.capture(
-		{
-			audio,
-			video,
-			videoConstraints
-		},
-		(stream) => {
-			if (!stream) return;
-
-			const recorder = new MediaRecorder(stream, {
-				ignoreMutedMedia: true,
-				audioBitsPerSecond,
-				videoBitsPerSecond,
-				bitsPerSecond,
-				mimeType,
-			});
-			recorders[index] = recorder;
-			// TODO: recorder onerror
-
-			recorder.ondataavailable = async function (event) {
-				if (event.data.size > 0) {
-					const buffer = await event.data.arrayBuffer();
-					// const data = arrayBufferToString(buffer);
-					console.log(buffer, `http://127.0.0.1:${messagePort}/api/record`)
-
-					fetch(`http://127.0.0.1:${messagePort}/api/record`, {
-						method: 'POST',
-						body: buffer,
-						headers: {
-							id: index,
-							timecode: event.timecode
-						}
-					})
-
-					// if (window.sendData) {
-					// 	window.sendData({
-					// 		id: index,
-					// 		data,
-					// 		timecode: event.timecode
-					// 	});
-					// }
+	return new Promise((resolve, reject) => {
+		chrome.tabCapture.capture(
+			{
+				audio,
+				video,
+				videoConstraints
+			},
+			(stream) => {
+				if (!stream) {
+					reject(1)
+					return
 				}
-			};
-			recorder.onerror = () => recorder.stop();
 
-			recorder.onstop = function () {
-				try {
-					const tracks = stream.getTracks();
+				const recorder = new MediaRecorder(stream, {
+					ignoreMutedMedia: true,
+					audioBitsPerSecond,
+					videoBitsPerSecond,
+					bitsPerSecond,
+					mimeType,
+				});
+				recorders[index] = recorder;
+				// TODO: recorder onerror
 
-					tracks.forEach(function (track) {
-						track.stop();
-					});
-				} catch (error) {}
-			};
-			stream.oninactive = () => {
-				try {
-					recorder.stop();
-				} catch (error) {}
-			};
+				recorder.ondataavailable = async function (event) {
+					if (event.data.size > 0) {
+						const buffer = await event.data.arrayBuffer();
+						// const data = arrayBufferToString(buffer);
+						fetch(`http://127.0.0.1:${messagePort}/api/record`, {
+							method: 'POST',
+							body: buffer,
+							headers: {
+								id: index,
+								timecode: event.timecode
+							}
+						})
+					}
+				};
+				recorder.onerror = () => recorder.stop();
 
-			recorder.start(frameSize);
-		}
-	);
+				recorder.onstop = function () {
+					try {
+						const tracks = stream.getTracks();
+
+						tracks.forEach(function (track) {
+							track.stop();
+						});
+					} catch (error) { }
+				};
+				stream.oninactive = () => {
+					try {
+						recorder.stop();
+					} catch (error) { }
+				};
+
+				recorder.start(frameSize);
+				resolve(0)
+			}
+		);
+	})
 }
 
 function STOP_RECORDING(index) {
