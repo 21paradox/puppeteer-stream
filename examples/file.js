@@ -1,7 +1,6 @@
-const { launch, getStream } = require("puppeteer-stream");
-const fs = require("fs");
-
-const file = fs.createWriteStream(__dirname + "/test.webm");
+const { 
+	launch 
+} = require('../dist/PuppeteerStream')
 
 async function test() {
 	const browser = await launch({
@@ -9,19 +8,14 @@ async function test() {
 			width: 1920,
 			height: 1080,
 		},
+		userDataDir: '/tmp/test-user-data-dir',
+		executablePath: '/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome',
+		args: [
+			'--headless=new',
+			`--remote-debugging-port=8088`
+		]
 	});
-
-	const page = await browser.newPage();
-	await page.goto("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-	const stream = await getStream(page, { audio: true, video: true });
-	console.log("recording");
-
-	stream.pipe(file);
-	setTimeout(async () => {
-		await stream.destroy();
-		file.close();
-		console.log("finished");
-	}, 1000 * 10);
+	console.log('running')
 }
 
 test();

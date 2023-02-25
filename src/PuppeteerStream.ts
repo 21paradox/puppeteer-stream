@@ -4,8 +4,10 @@ import http from 'http'
 
 import { Readable, ReadableOptions } from "stream";
 import * as path from "path";
+import { createWriteStream } from 'fs'
 
 type PageWithExtension = Omit<Page, "context"> & { context(): BrowserWithExtension, index: number };
+const rotateStreams = new Map()
 
 let currentIndex = 0;
 
@@ -16,7 +18,7 @@ export class Stream extends Readable {
 
 	timecode!: number;
 
-	_read() {}
+	_read() { }
 
 	// @ts-ignore
 	async destroy() {
@@ -30,9 +32,9 @@ export class Stream extends Readable {
 }
 
 
-type BrowserWithExtension = BrowserContext & { 
-	encoders?: Map<number, Stream>; 
-	videoCaptureExtension?: Page 
+type BrowserWithExtension = BrowserContext & {
+	encoders?: Map<number, Stream>;
+	videoCaptureExtension?: Page
 	messagePort?: number
 };
 
@@ -42,7 +44,7 @@ export async function launch(
 	}
 ): Promise<BrowserWithExtension> {
 	//if puppeteer library is not passed as first argument, then first argument is options
-	
+
 	const messagePort = await getPort()
 	const server = http.createServer(async (req, res) => {
 		const headers = req.headers
@@ -63,7 +65,31 @@ export async function launch(
 			}
 			res.end('ok')
 			return
+		} else if (req.url === '/api/capturechunk') {
+			const buffers = [];
+			for await (const chunk of req) {
+				buffers.push(chunk);
+			}
+			const bufall = Buffer.concat(buffers)
+
+			const tabId = Number(headers.id)
+			const fileName = headers.file as string
+			let writeStream = rotateStreams.get(tabId)
+
+			if (!writeStream) {
+				writeStream = createWriteStream(path.resolve(__dirname, fileName))
+				rotateStreams.set(tabId, writeStream)
+			}
+			writeStream.write(bufall)
+
+			res.end('ok')
+			return
+		} else if (req.url === '/api/capturechunkstop') {
+			const tabId = Number(headers.id)
+			let writeStream = rotateStreams.get(tabId)
+			writeStream.end()
 		}
+
 		res.end('a')
 	})
 	server.listen(messagePort)
@@ -91,7 +117,6 @@ export async function launch(
 
 		return x;
 	});
-	
 
 	if (!loadExtension) opts.args.push("--load-extension=" + extensionPath);
 	if (!loadExtensionExcept) opts.args.push("--disable-extensions-except=" + extensionPath);
@@ -123,6 +148,13 @@ export async function launch(
 		throw new Error("cannot get page of extension");
 	}
 
+	videoCaptureExtension.evaluate(
+		(cfg) => {
+			// @ts-ignore
+			return setMsgPort(cfg);
+		},
+		{ messagePort }
+	);
 	browser.videoCaptureExtension = videoCaptureExtension;
 
 

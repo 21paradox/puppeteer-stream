@@ -5,8 +5,13 @@
 
 
 const recorders = {};
+let messagePort = 0
+function setMsgPort(cfg) {
+	messagePort = cfg.messagePort
+}
 
-function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints, messagePort }) {
+
+function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints }) {
 	return new Promise((resolve, reject) => {
 		chrome.tabCapture.capture(
 			{
@@ -65,6 +70,94 @@ function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, v
 				resolve(0)
 			}
 		);
+	})
+}
+
+
+function captureByIndex(fileName, index, time) {
+	return new Promise((resolve, reject) => {
+		chrome.tabs.query({}, (tabList) => {
+			let curTab = tabList[index]
+			if (!curTab) {
+				for (const tab of tabList) {
+					if(tab.id === index) {
+						curTab = tab
+						break
+					}
+				}
+			}
+			if (!curTab) {
+				throw new Error('no curTab')
+			}
+			console.log('record', curTab.url, curTab.title);
+
+			const frameSize = 5 * 1000;
+
+			chrome.tabCapture.capture(
+				{
+					audio: true,
+					video: true,
+				},
+				(stream) => {
+					if (!stream) {
+						reject(1)
+						return
+					}
+					const recorder = new MediaRecorder(stream, {
+						ignoreMutedMedia: true,
+						mimeType: 'video/webm',
+					});
+
+					recorder.ondataavailable = async function (event) {
+						if (event.data.size > 0) {
+							const buffer = await event.data.arrayBuffer();
+							// const data = arrayBufferToString(buffer);
+							fetch(`http://127.0.0.1:${messagePort}/api/capturechunk`, {
+								method: 'POST',
+								body: buffer,
+								headers: {
+									// index: index,
+									id: curTab.id,
+									file: fileName,
+									timecode: event.timecode
+								}
+							})
+						}
+					};
+					recorder.onerror = () => recorder.stop();
+
+					recorder.onstop = function () {
+						fetch(`http://127.0.0.1:${messagePort}/api/capturechunkstop`, {
+							method: 'get',
+							headers: {
+								id: curTab.id,
+								file: fileName,
+							}
+						})
+						
+						try {
+							const tracks = stream.getTracks();
+
+							tracks.forEach(function (track) {
+								track.stop();
+							});
+						} catch (error) { }
+					};
+					stream.oninactive = () => {
+						try {
+							recorder.stop();
+						} catch (error) { }
+					};
+
+					recorder.start(frameSize);
+
+					setTimeout(() => {
+						recorder.stop()
+					}, 60 * 1000 * time)
+					resolve(0)
+				}
+			);
+		})
 	})
 }
 
