@@ -4,14 +4,14 @@
 
 
 
-const recorders = {};
+const recorders = new Map()
 let messagePort = 0
 function setMsgPort(cfg) {
 	messagePort = cfg.messagePort
 }
 
 
-function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints }) {
+function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints, autoStopTime }) {
 	return new Promise((resolve, reject) => {
 		chrome.tabCapture.capture(
 			{
@@ -27,12 +27,13 @@ function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, v
 
 				const recorder = new MediaRecorder(stream, {
 					ignoreMutedMedia: true,
-					audioBitsPerSecond,
-					videoBitsPerSecond,
-					bitsPerSecond,
+					// audioBitsPerSecond,
+					// videoBitsPerSecond,
+					// bitsPerSecond,
 					mimeType,
 				});
-				recorders[index] = recorder;
+				recorders.set(index, recorder)
+				// recorders[index] = recorder;
 				// TODO: recorder onerror
 
 				recorder.ondataavailable = async function (event) {
@@ -67,6 +68,12 @@ function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, v
 				};
 
 				recorder.start(frameSize);
+
+				if (autoStopTime) {
+					setTimeout(() => {
+						recorder.stop()
+					}, 60 * 1000 * autoStopTime)
+				}
 				resolve(0)
 			}
 		);
@@ -152,6 +159,8 @@ function captureByIndex(fileName, index, time) {
 					recorder.start(frameSize);
 
 					setTimeout(() => {
+						// todo stream
+						console.log('record stop', curTab.url, curTab.title, stream);
 						recorder.stop()
 					}, 60 * 1000 * time)
 					resolve(0)
@@ -163,8 +172,14 @@ function captureByIndex(fileName, index, time) {
 
 function STOP_RECORDING(index) {
 	//chrome.extension.getBackgroundPage().console.log(recorders)
-	if (!recorders[index]) return;
-	recorders[index].stop();
+	// if (!recorders[index]) return;
+	const r = recorders.get(index)
+	if (r) {
+		r.stop()
+	}
+	recorders.delete(index)
+	// recorders[index].stop();
+	// delete recorders[index]
 }
 
 function arrayBufferToString(buffer) {
