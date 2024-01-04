@@ -12,6 +12,8 @@ function setMsgPort(cfg) {
 
 
 function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, videoBitsPerSecond, bitsPerSecond, mimeType, videoConstraints, autoStopTime }) {
+	console.log({index, video, audio, frameSize})
+
 	return new Promise((resolve, reject) => {
 		chrome.tabCapture.capture(
 			{
@@ -21,6 +23,7 @@ function START_RECORDING({ index, video, audio, frameSize, audioBitsPerSecond, v
 			},
 			(stream) => {
 				if (!stream) {
+					console.log('no stream')
 					reject(1)
 					return
 				}

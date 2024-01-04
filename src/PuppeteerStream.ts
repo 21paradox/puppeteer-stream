@@ -199,6 +199,7 @@ export async function getStream(page: PageWithExtension, opts: getStreamOptions)
 		page.index = currentIndex++;
 	}
 	const browser = page.context();
+
 	await page.bringToFront();
 
 	await browser.videoCaptureExtension?.evaluate(
